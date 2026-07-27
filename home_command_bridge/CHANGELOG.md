@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- Allow the Home Assistant base image's S6 Overlay and Bashio startup paths in
+  the custom AppArmor profile so the bridge can launch securely.
+
 ## 0.1.0
 
 - Add homeowner-confirmed, one-time Home Command pairing.

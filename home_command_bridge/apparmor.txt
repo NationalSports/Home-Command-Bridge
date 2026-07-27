@@ -3,9 +3,27 @@
 profile home_command_bridge flags=(attach_disconnected,mediate_deleted) {
   #include <abstractions/base>
 
+  file,
+  signal (send) set=(kill,term,int,hup,cont),
+
   network inet stream,
   network inet6 stream,
   network netlink raw,
+
+  # S6 Overlay and Bashio startup used by the Home Assistant base image.
+  /init ix,
+  /bin/** ix,
+  /usr/bin/** ix,
+  /run/{s6,s6-rc*,service}/** ix,
+  /package/** ix,
+  /command/** ix,
+  /etc/services.d/** rwix,
+  /etc/cont-init.d/** rwix,
+  /etc/cont-finish.d/** rwix,
+  /run/{,**} rwk,
+  /usr/lib/bashio/** ix,
+  /run.sh rix,
+  /tmp/** rwk,
 
   /opt/home-command/** r,
   /usr/bin/python3 ix,
@@ -19,5 +37,6 @@ profile home_command_bridge flags=(attach_disconnected,mediate_deleted) {
   /etc/nsswitch.conf r,
   /data/** rwk,
   /proc/sys/kernel/random/uuid r,
+  /dev/tty rw,
   /dev/urandom r,
 }

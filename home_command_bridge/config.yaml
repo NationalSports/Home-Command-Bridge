@@ -1,5 +1,5 @@
 name: Home Command Bridge
-version: "0.1.1"
+version: "0.1.2"
 slug: home_command_bridge
 description: Securely connects Home Assistant to Home Command.
 url: https://github.com/NationalSports/Home-Command-Bridge
@@ -29,6 +29,10 @@ options:
     - calendar
     - scene
     - automation
+    - device_tracker
+    - button
+    - number
+    - select
 schema:
   home_command_url: url
   pairing_code: str

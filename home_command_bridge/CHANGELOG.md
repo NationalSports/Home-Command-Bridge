@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2
+
+- Add approved entity support for vehicle location, action buttons, numeric
+  controls, and selectable settings.
+- Prepare the bridge for official Tesla Fleet entities while preserving the
+  homeowner-controlled domain allowlist.
+
 ## 0.1.1
 
 - Allow the Home Assistant base image's S6 Overlay and Bashio startup paths in

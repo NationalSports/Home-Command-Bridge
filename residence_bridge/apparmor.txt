@@ -1,0 +1,23 @@
+#include <tunables/global>
+
+profile residence_bridge flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  network inet stream,
+  network inet6 stream,
+  network netlink raw,
+
+  /opt/residence/** r,
+  /usr/bin/python3 ix,
+  /usr/lib/python3.*/** mr,
+  /usr/lib/lib*.so* mr,
+  /lib/lib*.so* mr,
+  /lib/ld-musl-*.so.1 mr,
+  /etc/ssl/** r,
+  /etc/resolv.conf r,
+  /etc/hosts r,
+  /etc/nsswitch.conf r,
+  /data/** rwk,
+  /proc/sys/kernel/random/uuid r,
+  /dev/urandom r,
+}

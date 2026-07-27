@@ -1,0 +1,37 @@
+name: Residence Bridge
+version: "0.1.0"
+slug: residence_bridge
+description: Securely connects Home Assistant to Residence.
+url: https://github.com/NationalSports/Residence-Bridge
+arch:
+  - aarch64
+  - amd64
+startup: application
+boot: auto
+init: false
+homeassistant_api: true
+apparmor: true
+options:
+  residence_url: "https://residence-home-command.steve213018.chatgpt.site"
+  pairing_code: ""
+  log_level: info
+  sync_domains:
+    - light
+    - switch
+    - climate
+    - media_player
+    - lock
+    - cover
+    - sensor
+    - binary_sensor
+    - alarm_control_panel
+    - weather
+    - calendar
+    - scene
+    - automation
+schema:
+  residence_url: url
+  pairing_code: str
+  log_level: list(debug|info|warning|error)
+  sync_domains:
+    - str

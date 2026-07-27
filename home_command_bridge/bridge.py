@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Residence Bridge for Home Assistant.
+"""Home Command Bridge for Home Assistant.
 
 The bridge keeps Home Assistant private behind the homeowner's network. It
-opens outbound-only connections to Residence, publishes a filtered state
+opens outbound-only connections to Home Command, publishes a filtered state
 snapshot, and executes short-lived commands after the homeowner pairs it.
 """
 
@@ -25,7 +25,7 @@ import aiohttp
 
 VERSION = "0.1.0"
 OPTIONS_PATH = Path("/data/options.json")
-CREDENTIALS_PATH = Path("/data/residence-credentials.json")
+CREDENTIALS_PATH = Path("/data/home-command-credentials.json")
 CORE_REST_URL = "http://supervisor/core/api/"
 CORE_WEBSOCKET_URL = "ws://supervisor/core/websocket"
 PAIRING_POLL_SECONDS = 1.5
@@ -90,7 +90,7 @@ def sanitize_state(state: dict[str, Any]) -> dict[str, Any] | None:
             "friendly_name": attributes.get("friendly_name"),
             "device_class": attributes.get("device_class"),
             "unit_of_measurement": attributes.get("unit_of_measurement"),
-            "residence_attributes_trimmed": True,
+            "home_command_attributes_trimmed": True,
         }
     return {
         "entity_id": entity_id,
@@ -169,11 +169,11 @@ class HomeAssistantSocket:
                 await self.reader_task
 
 
-class ResidenceBridge:
+class HomeCommandBridge:
     def __init__(self) -> None:
         self.options = load_json(OPTIONS_PATH, {})
         self.credentials = load_json(CREDENTIALS_PATH, {})
-        self.base_url = clean_url(str(self.options.get("residence_url") or ""))
+        self.base_url = clean_url(str(self.options.get("home_command_url") or ""))
         self.pairing_code = str(self.options.get("pairing_code") or "").strip()
         self.sync_domains = {
             str(domain).lower()
@@ -181,7 +181,7 @@ class ResidenceBridge:
             if isinstance(domain, str) and domain
         }
         self.supervisor_token = os.environ.get("SUPERVISOR_TOKEN", "")
-        self.log = logging.getLogger("residence")
+        self.log = logging.getLogger("home_command")
         self.http: aiohttp.ClientSession | None = None
         self.ha: HomeAssistantSocket | None = None
         self.entities: dict[str, dict[str, Any]] = {}
@@ -242,9 +242,9 @@ class ResidenceBridge:
             body = await response.json(content_type=None)
             if response.status not in expected:
                 message = body.get("error") if isinstance(body, dict) else None
-                raise RuntimeError(str(message or f"Residence returned HTTP {response.status}."))
+                raise RuntimeError(str(message or f"Home Command returned HTTP {response.status}."))
             if not isinstance(body, dict):
-                raise RuntimeError("Residence returned an invalid response.")
+                raise RuntimeError("Home Command returned an invalid response.")
             return body
 
     async def home_assistant_version(self) -> str:
@@ -262,7 +262,7 @@ class ResidenceBridge:
         if self.credentials.get("homeId") and self.credentials.get("bridgeRelaySecret"):
             return
         if not self.base_url.startswith(("https://", "http://")):
-            raise RuntimeError("Set a valid Residence URL in the app configuration.")
+            raise RuntimeError("Set a valid Home Command URL in the app configuration.")
         code_fingerprint = hashlib.sha256(
             self.pairing_code.upper().replace("-", "").encode("utf-8")
         ).hexdigest() if self.pairing_code else ""
@@ -297,7 +297,7 @@ class ResidenceBridge:
             pairing_id = str(pairing.get("id") or "")
             claim_secret = str(claim.get("claimSecret") or "")
             if not pairing_id or not claim_secret:
-                raise RuntimeError("Residence did not return a pairing claim.")
+                raise RuntimeError("Home Command did not return a pairing claim.")
             self.credentials.update({
                 "pairingId": pairing_id,
                 "claimSecret": claim_secret,
@@ -330,13 +330,13 @@ class ResidenceBridge:
         )
         home_id = str(registration.get("homeId") or "")
         if not home_id:
-            raise RuntimeError("Residence did not confirm relay registration.")
+            raise RuntimeError("Home Command did not confirm relay registration.")
         self.credentials.update({"homeId": home_id, "bridgeRelaySecret": relay_secret})
         self.credentials.pop("claimSecret", None)
         self.credentials.pop("pendingRelaySecret", None)
         self.credentials.pop("pairingCodeFingerprint", None)
         self.save_credentials()
-        self.log.info("Residence pairing confirmed. Secure relay registered.")
+        self.log.info("Home Command pairing confirmed. Secure relay registered.")
 
     async def home_assistant_loop(self) -> None:
         delay = 1.0
@@ -357,7 +357,10 @@ class ResidenceBridge:
                 self.ha_connected.set()
                 self.dirty.set()
                 delay = 1.0
-                self.log.info("Home Assistant connected; %d entities approved for Residence.", len(self.entities))
+                self.log.info(
+                    "Home Assistant connected; %d entities approved for Home Command.",
+                    len(self.entities),
+                )
 
                 while not self.stopping.is_set():
                     payload = await self.ha.events.get()
@@ -449,7 +452,7 @@ class ResidenceBridge:
             domain = str(command.get("domain") or "")
             service = str(command.get("service") or "")
             if domain not in self.sync_domains:
-                raise RuntimeError(f"The {domain} domain is not approved for Residence.")
+                raise RuntimeError(f"The {domain} domain is not approved for Home Command.")
             await self.ha.command({
                 "type": "call_service",
                 "domain": domain,
@@ -508,14 +511,14 @@ async def main() -> None:
     level = str(options.get("log_level") or "info").upper()
     logging.basicConfig(
         level=getattr(logging, level, logging.INFO),
-        format="%(asctime)s %(levelname)s [residence] %(message)s",
+        format="%(asctime)s %(levelname)s [home_command] %(message)s",
     )
-    bridge = ResidenceBridge()
+    bridge = HomeCommandBridge()
     loop = asyncio.get_running_loop()
     for signal_name in (signal.SIGTERM, signal.SIGINT):
         with suppress(NotImplementedError):
             loop.add_signal_handler(signal_name, bridge.stopping.set)
-    logging.getLogger("residence").info("Residence Bridge %s starting.", VERSION)
+    logging.getLogger("home_command").info("Home Command Bridge %s starting.", VERSION)
     await bridge.run()
 
 
@@ -525,5 +528,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         pass
     except Exception as exc:
-        logging.getLogger("residence").critical("%s", exc)
+        logging.getLogger("home_command").critical("%s", exc)
         sys.exit(1)

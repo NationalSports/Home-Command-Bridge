@@ -1,0 +1,13 @@
+configuration:
+  home_command_url:
+    name: Home Command URL
+    description: The secure address of your Home Command deployment.
+  pairing_code:
+    name: One-time pairing code
+    description: Create this code from Home Command → Integrations → Home Assistant.
+  log_level:
+    name: Log level
+    description: Detail included in the Home Command Bridge log.
+  sync_domains:
+    name: Sync domains
+    description: Home Assistant entity types Home Command may see and control.

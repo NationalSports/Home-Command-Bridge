@@ -1,8 +1,8 @@
-name: Residence Bridge
+name: Home Command Bridge
 version: "0.1.0"
-slug: residence_bridge
-description: Securely connects Home Assistant to Residence.
-url: https://github.com/NationalSports/Residence-Bridge
+slug: home_command_bridge
+description: Securely connects Home Assistant to Home Command.
+url: https://github.com/NationalSports/Home-Command-Bridge
 arch:
   - aarch64
   - amd64
@@ -12,7 +12,7 @@ init: false
 homeassistant_api: true
 apparmor: true
 options:
-  residence_url: "https://residence-home-command.steve213018.chatgpt.site"
+  home_command_url: "https://residence-home-command.steve213018.chatgpt.site"
   pairing_code: ""
   log_level: info
   sync_domains:
@@ -30,7 +30,7 @@ options:
     - scene
     - automation
 schema:
-  residence_url: url
+  home_command_url: url
   pairing_code: str
   log_level: list(debug|info|warning|error)
   sync_domains:

@@ -12,7 +12,7 @@ LABEL \
 
 RUN apk add --no-cache python3 py3-aiohttp
 
-COPY bridge.py /opt/home-command/bridge.py
+COPY bridge.py camera_policy.py /opt/home-command/
 COPY run.sh /run.sh
 RUN chmod a+x /run.sh
 

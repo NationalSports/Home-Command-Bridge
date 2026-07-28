@@ -20,11 +20,21 @@ from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import aiohttp
+from camera_policy import (
+    BLINK_MIN_TRIGGER_SECONDS,
+    MAX_CAMERA_SNAPSHOT_BYTES,
+    camera_provider,
+    camera_registry_metadata,
+    entity_is_in_scope,
+    remaining_camera_trigger_delay,
+    safe_camera_entity_id,
+    validate_camera_snapshot,
+)
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 OPTIONS_PATH = Path("/data/options.json")
 CREDENTIALS_PATH = Path("/data/home-command-credentials.json")
 CORE_REST_URL = "http://supervisor/core/api/"
@@ -85,7 +95,10 @@ def json_safe(value: Any) -> Any:
     return str(value)
 
 
-def sanitize_state(state: dict[str, Any]) -> dict[str, Any] | None:
+def sanitize_state(
+    state: dict[str, Any],
+    extra_attributes: dict[str, str] | None = None,
+) -> dict[str, Any] | None:
     entity_id = state.get("entity_id")
     status = state.get("state")
     if not isinstance(entity_id, str) or not isinstance(status, str):
@@ -93,12 +106,17 @@ def sanitize_state(state: dict[str, Any]) -> dict[str, Any] | None:
     attributes = json_safe(state.get("attributes") or {})
     if not isinstance(attributes, dict):
         attributes = {}
+    for key, value in (extra_attributes or {}).items():
+        attributes.setdefault(key, value)
     encoded = json.dumps(attributes, separators=(",", ":")).encode("utf-8")
     if len(encoded) > MAX_ATTRIBUTE_BYTES:
         attributes = {
             "friendly_name": attributes.get("friendly_name"),
             "device_class": attributes.get("device_class"),
             "unit_of_measurement": attributes.get("unit_of_measurement"),
+            "integration": attributes.get("integration"),
+            "manufacturer": attributes.get("manufacturer"),
+            "model": attributes.get("model"),
             "home_command_attributes_trimmed": True,
         }
     return {
@@ -241,6 +259,11 @@ class HomeCommandBridge:
             for domain in self.options.get("sync_domains", [])
             if isinstance(domain, str) and domain
         }
+        self.camera_entities = {
+            str(entity_id).lower()
+            for entity_id in self.options.get("camera_entities", [])
+            if isinstance(entity_id, str) and safe_camera_entity_id(entity_id.lower())
+        }
         self.supervisor_token = os.environ.get("SUPERVISOR_TOKEN", "")
         self.log = logging.getLogger("home_command")
         self.http: aiohttp.ClientSession | None = None
@@ -251,6 +274,7 @@ class HomeCommandBridge:
             "devices": [],
             "areas": [],
         }
+        self.entity_metadata: dict[str, dict[str, str]] = {}
         self.exposure: dict[str, Any] = {"available": False, "entities": {}}
         self.integration_health: dict[str, Any] = {
             "available": False,
@@ -265,6 +289,8 @@ class HomeCommandBridge:
                 for domain in sorted(INTEGRATION_HEALTH_DOMAINS)
             },
         }
+        self.last_blink_trigger_at: float | None = None
+        self.blink_trigger_lock = asyncio.Lock()
         self.dirty = asyncio.Event()
         self.stopping = asyncio.Event()
         self.ha_connected = asyncio.Event()
@@ -286,7 +312,7 @@ class HomeCommandBridge:
         return {"Authorization": f"BridgeRelay {secret}"}
 
     def in_scope(self, entity_id: str) -> bool:
-        return entity_id.partition(".")[0] in self.sync_domains
+        return entity_is_in_scope(entity_id, self.sync_domains, self.camera_entities)
 
     def snapshot_entities(self) -> list[dict[str, Any]]:
         snapshot: list[dict[str, Any]] = []
@@ -382,6 +408,7 @@ class HomeCommandBridge:
             "devices": devices,
             "areas": [area for area in areas if area["id"] in referenced_areas],
         }
+        self.entity_metadata = camera_registry_metadata(entities, devices)
 
     async def refresh_exposure(self) -> None:
         if not self.ha:
@@ -598,15 +625,15 @@ class HomeCommandBridge:
                 assert self.http is not None
                 self.ha = HomeAssistantSocket(self.http, self.supervisor_token, self.log)
                 await self.ha.connect()
+                await self.refresh_registries()
                 states = await self.ha.command({"type": "get_states"})
                 self.entities = {}
                 for raw_state in states or []:
                     entity_id = str(raw_state.get("entity_id") or "")
                     if self.in_scope(entity_id):
-                        state = sanitize_state(raw_state)
+                        state = sanitize_state(raw_state, self.entity_metadata.get(entity_id))
                         if state:
                             self.entities[entity_id] = state
-                await self.refresh_registries()
                 await self.refresh_exposure()
                 await self.refresh_integration_health()
                 await self.ha.command({"type": "subscribe_events", "event_type": "state_changed"})
@@ -636,7 +663,7 @@ class HomeCommandBridge:
                     if raw_state is None:
                         self.entities.pop(entity_id, None)
                     elif isinstance(raw_state, dict):
-                        state = sanitize_state(raw_state)
+                        state = sanitize_state(raw_state, self.entity_metadata.get(entity_id))
                         if state:
                             self.entities[entity_id] = state
                     self.dirty.set()
@@ -717,6 +744,67 @@ class HomeCommandBridge:
             },
         )
 
+    async def upload_camera_snapshot(self, command_id: str, entity_id: str) -> None:
+        assert self.http is not None
+        if not safe_camera_entity_id(entity_id):
+            raise RuntimeError("Camera snapshot target is invalid.")
+        async with self.http.get(
+            CORE_REST_URL + f"camera_proxy/{quote(entity_id, safe='.')}",
+            headers={"Authorization": f"Bearer {self.supervisor_token}"},
+        ) as response:
+            image = await response.content.read(MAX_CAMERA_SNAPSHOT_BYTES + 1)
+            try:
+                content_type = validate_camera_snapshot(
+                    response.status,
+                    response.headers.get("Content-Type", ""),
+                    image,
+                )
+            except ValueError as error:
+                raise RuntimeError(str(error)) from error
+
+        path = (
+            f"/api/bridge/relay/cameras/{quote(entity_id, safe='')}/snapshot"
+            f"?homeId={quote(str(self.credentials['homeId']), safe='')}"
+            f"&commandId={quote(command_id, safe='')}"
+        )
+        async with self.http.post(
+            endpoint(self.base_url, path),
+            headers={**self.relay_headers(), "Content-Type": content_type},
+            data=image,
+        ) as response:
+            body = await response.json(content_type=None)
+            if response.status != 201:
+                message = body.get("error") if isinstance(body, dict) else None
+                raise RuntimeError(str(message or f"Snapshot relay returned HTTP {response.status}."))
+
+    async def prepare_camera_snapshot(self, entity_id: str) -> None:
+        state = self.entities.get(entity_id) or {}
+        attributes = state.get("attributes") if isinstance(state, dict) else {}
+        if not isinstance(attributes, dict):
+            attributes = {}
+        if camera_provider(entity_id, attributes) != "blink":
+            return
+        if not self.ha:
+            raise RuntimeError("Home Assistant is unavailable.")
+        async with self.blink_trigger_lock:
+            loop = asyncio.get_running_loop()
+            delay = remaining_camera_trigger_delay(
+                self.last_blink_trigger_at,
+                loop.time(),
+                BLINK_MIN_TRIGGER_SECONDS,
+            )
+            if delay:
+                await asyncio.sleep(delay)
+            await self.ha.command({
+                "type": "call_service",
+                "domain": "blink",
+                "service": "trigger_camera",
+                "target": {"entity_id": entity_id},
+                "service_data": {},
+            })
+            self.last_blink_trigger_at = loop.time()
+            self.log.info("Requested a fresh image for approved Blink camera %s.", entity_id)
+
     async def execute_command(self, command: dict[str, Any]) -> None:
         command_id = str(command.get("id") or "")
         if not command_id:
@@ -766,13 +854,23 @@ class HomeCommandBridge:
                 service = str(command.get("service") or "")
                 if domain not in self.sync_domains:
                     raise RuntimeError(f"The {domain} domain is not approved for Home Command.")
-                await self.ha.command({
-                    "type": "call_service",
-                    "domain": domain,
-                    "service": service,
-                    "target": command.get("target") or {},
-                    "service_data": command.get("serviceData") or {},
-                })
+                if domain == "camera" and service == "home_command_snapshot":
+                    target = command.get("target") or {}
+                    entity_id = target.get("entity_id") if isinstance(target, dict) else None
+                    if not isinstance(entity_id, str):
+                        raise RuntimeError("Camera snapshot requires one camera entity.")
+                    if not self.in_scope(entity_id):
+                        raise RuntimeError("That camera is not approved for Home Command.")
+                    await self.prepare_camera_snapshot(entity_id)
+                    await self.upload_camera_snapshot(command_id, entity_id)
+                else:
+                    await self.ha.command({
+                        "type": "call_service",
+                        "domain": domain,
+                        "service": service,
+                        "target": command.get("target") or {},
+                        "service_data": command.get("serviceData") or {},
+                    })
                 outcome = {"status": "completed", "error": ""}
                 self.log.info("Completed approved %s.%s command.", domain, service)
         except Exception as error:

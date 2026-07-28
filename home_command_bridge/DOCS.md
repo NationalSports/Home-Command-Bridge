@@ -30,7 +30,8 @@ also publishes a restricted view of Home Assistant's registries so Residence
 can group entities into devices and rooms. That view contains display names,
 manufacturer, model, area, and integration platform. It excludes hardware
 identifiers, serial numbers, MAC addresses, network addresses, and config-entry
-data.
+titles/details. Bridge 0.4 publishes only setup counts and loaded state for
+Tuya, HomeKit Bridge, HomeKit Device, and Matter.
 
 The app opens outbound connections only. No port forwarding, router changes,
 public Home Assistant URL, or long-lived access token is required.
@@ -39,7 +40,7 @@ public Home Assistant URL, or long-lived access token is required.
 
 1. Enable Alexa in Home Assistant using **Home Assistant Cloud**, or finish an
    existing manual Alexa Smart Home skill setup.
-2. Upgrade and restart Home Command Bridge 0.3.0 or newer.
+2. Upgrade and restart Home Command Bridge 0.4.0 or newer.
 3. Open **Integrations → Amazon Alexa** in Residence.
 4. Review each eligible device and choose **Share with Alexa**.
 5. Ask Alexa to discover devices if the new endpoints do not appear
@@ -53,14 +54,34 @@ vehicles are rejected by the Residence API and the local bridge.
 
 ## Add Apple Home
 
-Open **Integrations → Apple Home** in Residence and choose **Open HomeKit
-Bridge setup**. Home Assistant owns the bridge and publishes accessories on the
-local network. Choose the accessories in Home Assistant, then scan the pairing
-QR code in Apple Home on an iPhone or iPad.
+Residence supports both local HomeKit directions:
+
+1. To publish approved Home Assistant devices to Apple Home, open
+   **Integrations → Apple Home**, choose **Open HomeKit Bridge setup**, select
+   the entities to publish, and scan the pairing code in Apple Home.
+2. To import a compatible HomeKit accessory into Residence, choose
+   **Open HomeKit Device setup**. The accessory must be available to pair with
+   Home Assistant and is imported individually.
+3. If desired, publish an imported accessory back to Apple Home through the
+   HomeKit Bridge.
 
 Apple credentials, the HomeKit pairing code, and Apple Home data never pass
-through Residence. Begin with a small accessory set and keep each bridge below
-Apple Home's 150-accessory limit.
+through Residence. A HomeKit accessory generally cannot remain paired to Apple
+Home and Home Assistant as two HomeKit controllers at once. Begin with a small
+accessory set and keep each bridge below Apple Home's 150-accessory limit.
+
+## Add Smart Life / Tuya
+
+1. Confirm the device works in Smart Life or Tuya Smart.
+2. Open **Integrations → Smart Life / Tuya** in Residence.
+3. Choose **Open Tuya setup**.
+4. Retrieve the Smart Life user code and scan Home Assistant's QR code with the
+   Smart Life app.
+5. Return to Residence. Bridge 0.4 refreshes setup health within one minute and
+   groups approved Tuya devices automatically.
+
+Residence receives no Smart Life password, user code, QR content, account
+identifier, or config-entry title.
 
 ## Add DEWENWILS devices
 
@@ -74,7 +95,7 @@ in Tuya or Smart Life:
    Assistant.
 4. Keep `switch`, `sensor`, `number`, and `select` in **Sync domains**. Add
    `light` when the product exposes lighting controls.
-5. Restart Home Command Bridge after upgrading to 0.2.0 or newer.
+5. Restart Home Command Bridge after upgrading to 0.4.0 or newer.
 6. Open **Integrations → DEWENWILS** in Residence.
 
 Residence identifies the brand from Home Assistant's manufacturer/model
@@ -82,6 +103,33 @@ metadata, groups multi-channel products by device ID, assigns the Home
 Assistant area, and exposes power or energy monitoring only when the model
 provides those entities. Commands are sent back through Home Assistant; the
 Residence cloud never receives the Tuya account credential.
+
+## Add Matter
+
+Open **Integrations → Matter** in Residence and choose **Open Matter setup**.
+Commission the device with its QR code or setup number in Home Assistant.
+Residence receives only the approved entity/device view after commissioning;
+the Matter setup code remains local.
+
+## Add a Rivian vehicle
+
+Residence can display a Rivian vehicle that is already represented by approved
+Home Assistant entities. This route does not ask Residence for a Rivian username,
+password, token, or complete VIN.
+
+1. Add the vehicle provider you trust to Home Assistant and confirm the vehicle
+   appears as one device in the device registry.
+2. Keep `sensor`, `binary_sensor`, `lock`, `climate`, and `device_tracker` in
+   **Sync domains**.
+3. Restart Home Command Bridge after changing its domain list.
+4. Open **Vehicles → Vehicle services → Rivian** in Residence and choose
+   **Scan Jarvis again**.
+
+Residence recognizes Rivian, R1T, R1S, R2, and R3 model evidence from the
+approved Home Assistant device and entity metadata. Battery, range, charging,
+lock, climate, and location are shown only when matching entities are present.
+Remote commands remain unavailable until Residence can identify and verify the
+provider's Home Assistant service contract safely.
 
 ## Troubleshooting
 

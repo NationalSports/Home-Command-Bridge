@@ -24,7 +24,7 @@ from urllib.parse import urljoin
 
 import aiohttp
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 OPTIONS_PATH = Path("/data/options.json")
 CREDENTIALS_PATH = Path("/data/home-command-credentials.json")
 CORE_REST_URL = "http://supervisor/core/api/"
@@ -38,6 +38,7 @@ MAX_SNAPSHOT_BYTES = 1_500_000
 MAX_REGISTRY_BYTES = 500_000
 MAX_PROCESSED_COMMANDS = 200
 ALEXA_SAFE_DOMAINS = {"light", "switch", "climate", "scene", "media_player"}
+INTEGRATION_HEALTH_DOMAINS = {"tuya", "homekit", "homekit_controller", "matter"}
 SENSITIVE_ATTRIBUTE_FRAGMENTS = ("token", "password", "secret", "credential", "api_key", "access_key")
 REGISTRY_EVENT_TYPES = {
     "entity_registry_updated",
@@ -251,6 +252,19 @@ class HomeCommandBridge:
             "areas": [],
         }
         self.exposure: dict[str, Any] = {"available": False, "entities": {}}
+        self.integration_health: dict[str, Any] = {
+            "available": False,
+            "bridgeVersion": VERSION,
+            "homeAssistantVersion": "unknown",
+            "domains": {
+                domain: {
+                    "configured": False,
+                    "entryCount": 0,
+                    "loadedEntryCount": 0,
+                }
+                for domain in sorted(INTEGRATION_HEALTH_DOMAINS)
+            },
+        }
         self.dirty = asyncio.Event()
         self.stopping = asyncio.Event()
         self.ha_connected = asyncio.Event()
@@ -394,6 +408,74 @@ class HomeCommandBridge:
                     entities[entity_id] = {"cloud.alexa": alexa}
         self.exposure = {"available": True, "entities": entities}
 
+    async def refresh_integration_health(self) -> None:
+        if not self.ha:
+            return
+        domains = {
+            domain: {
+                "configured": False,
+                "entryCount": 0,
+                "loadedEntryCount": 0,
+            }
+            for domain in sorted(INTEGRATION_HEALTH_DOMAINS)
+        }
+        available = False
+        try:
+            result = await self.ha.command({"type": "config_entries/get"})
+            raw_entries = result.get("entries") if isinstance(result, dict) else result
+            for entry in raw_entries or []:
+                if not isinstance(entry, dict):
+                    continue
+                domain = str(entry.get("domain") or "")
+                if domain not in domains:
+                    continue
+                domains[domain]["entryCount"] += 1
+                if str(entry.get("state") or "").lower() == "loaded":
+                    domains[domain]["loadedEntryCount"] += 1
+            for status in domains.values():
+                status["configured"] = status["entryCount"] > 0
+            available = True
+        except RuntimeError as error:
+            self.log.info("Integration health controls are unavailable: %s", error)
+
+        home_assistant_version = "unknown"
+        try:
+            config = await self.ha.command({"type": "get_config"})
+            if isinstance(config, dict):
+                home_assistant_version = clean_registry_text(config.get("version"), 100) or "unknown"
+        except RuntimeError:
+            home_assistant_version = await self.home_assistant_version()
+
+        self.integration_health = {
+            "available": available,
+            "bridgeVersion": VERSION,
+            "homeAssistantVersion": home_assistant_version,
+            "domains": domains,
+        }
+
+    def snapshot_integration_health(self) -> dict[str, Any]:
+        eligible_entity_ids = {
+            entity_id
+            for entity_id in self.entities
+            if entity_id.partition(".")[0] in ALEXA_SAFE_DOMAINS
+        }
+        exposure_entities = self.exposure.get("entities")
+        explicit_entities = exposure_entities if isinstance(exposure_entities, dict) else {}
+        return {
+            **self.integration_health,
+            "alexa": {
+                "exposureAvailable": bool(self.exposure.get("available")),
+                "eligibleEntityCount": len(eligible_entity_ids),
+                "explicitEntityCount": len(explicit_entities),
+                "explicitlyExposedCount": sum(
+                    1
+                    for assistants in explicit_entities.values()
+                    if isinstance(assistants, dict)
+                    and assistants.get("cloud.alexa") is True
+                ),
+            },
+        }
+
     async def request_json(
         self,
         method: str,
@@ -526,6 +608,7 @@ class HomeCommandBridge:
                             self.entities[entity_id] = state
                 await self.refresh_registries()
                 await self.refresh_exposure()
+                await self.refresh_integration_health()
                 await self.ha.command({"type": "subscribe_events", "event_type": "state_changed"})
                 for event_type in REGISTRY_EVENT_TYPES:
                     await self.ha.command({"type": "subscribe_events", "event_type": event_type})
@@ -569,6 +652,20 @@ class HomeCommandBridge:
                     await self.ha.close()
                     self.ha = None
 
+    async def integration_health_loop(self) -> None:
+        while not self.stopping.is_set():
+            try:
+                await self.ha_connected.wait()
+                if self.ha:
+                    await self.refresh_integration_health()
+                    self.dirty.set()
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                self.log.info("Integration health refresh interrupted: %s", error)
+                await asyncio.sleep(10)
+
     async def state_loop(self) -> None:
         last_sent = 0.0
         while not self.stopping.is_set():
@@ -595,6 +692,7 @@ class HomeCommandBridge:
                         "entities": self.snapshot_entities(),
                         "registry": self.snapshot_registry(),
                         "exposure": self.exposure,
+                        "integrationHealth": self.snapshot_integration_health(),
                         "capturedAt": datetime.now(timezone.utc).isoformat(),
                     },
                 )
@@ -712,6 +810,7 @@ class HomeCommandBridge:
             await self.pair_if_needed()
             tasks = [
                 asyncio.create_task(self.home_assistant_loop(), name="home-assistant"),
+                asyncio.create_task(self.integration_health_loop(), name="integration-health"),
                 asyncio.create_task(self.state_loop(), name="state-relay"),
                 asyncio.create_task(self.command_loop(), name="command-relay"),
             ]

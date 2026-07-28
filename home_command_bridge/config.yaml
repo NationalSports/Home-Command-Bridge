@@ -1,5 +1,5 @@
 name: Home Command Bridge
-version: "0.3.0"
+version: "0.4.0"
 slug: home_command_bridge
 description: Securely connects Home Assistant to Home Command.
 url: https://github.com/NationalSports/Home-Command-Bridge

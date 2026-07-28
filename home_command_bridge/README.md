@@ -13,6 +13,13 @@ Assistant's supported voice-assistant WebSocket commands. Residence can share
 only approved lights, switches, climate entities, scenes, and media players;
 security-sensitive and observational domains remain excluded.
 
+Version 0.4 adds privacy-filtered setup health for Home Assistant's official
+Tuya, HomeKit Bridge, HomeKit Device, and Matter integrations. It publishes only
+each supported domain's config-entry and loaded-entry counts, Bridge/Core
+versions, and Alexa safe/exposed counts. Config-entry titles, account
+identifiers, credentials, pairing codes, and accessory graphs never leave Home
+Assistant.
+
 Version 0.2 added privacy-filtered device and area registry metadata. Residence
 uses it to group multi-channel hardware, preserve room assignments, identify
 manufacturers such as DEWENWILS, and normalize capabilities without receiving

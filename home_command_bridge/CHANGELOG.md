@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0
+
+- Publish privacy-filtered setup health for the official Tuya, HomeKit Bridge,
+  HomeKit Device, and Matter integrations without relaying config-entry titles
+  or credentials.
+- Publish Bridge and Home Assistant versions plus Alexa eligible, explicit, and
+  explicitly exposed entity counts.
+- Refresh integration health every minute so Residence can verify setup without
+  requiring an add-on restart.
+
 ## 0.3.0
 
 - Read Home Assistant's explicit voice-assistant exposure preferences.

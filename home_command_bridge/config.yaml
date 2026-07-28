@@ -1,5 +1,5 @@
 name: Home Command Bridge
-version: "0.1.2"
+version: "0.3.0"
 slug: home_command_bridge
 description: Securely connects Home Assistant to Home Command.
 url: https://github.com/NationalSports/Home-Command-Bridge
@@ -12,7 +12,7 @@ init: false
 homeassistant_api: true
 apparmor: true
 options:
-  home_command_url: "https://residence-home-command.steve213018.chatgpt.site"
+  home_command_url: "https://residence-home-command.netlify.app"
   pairing_code: ""
   log_level: info
   sync_domains:

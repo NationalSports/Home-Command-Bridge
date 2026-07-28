@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0
+
+- Read Home Assistant's explicit voice-assistant exposure preferences.
+- Accept a narrow Alexa-only exposure command for approved lights, switches,
+  climate entities, scenes, and media players.
+- Keep locks, alarm panels, covers, cameras, sensors, trackers, and vehicles
+  outside Residence's Alexa exposure control.
+
+## 0.2.0
+
+- Publish privacy-filtered Home Assistant entity, device, and area registry
+  metadata with each relay snapshot.
+- Group multi-entity hardware into Residence devices with manufacturer,
+  integration-platform, room, and capability provenance.
+- Add first-class DEWENWILS detection through Home Assistant's Tuya integration.
+- Exclude device identifiers, serial numbers, network addresses, and config-entry
+  data from the relay.
+
 ## 0.1.2
 
 - Add approved entity support for vehicle location, action buttons, numeric

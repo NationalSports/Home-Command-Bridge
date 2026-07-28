@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0
+
+- Add an optional exact camera-entity allowlist and an authenticated snapshot
+  relay that keeps Home Assistant credentials and camera URLs inside the home.
+- Enrich camera state with integration, manufacturer, and model metadata from
+  Home Assistant's restricted registry view.
+- Request a fresh Blink image before proxying it and preserve Blink's
+  five-second minimum interval between sequential trigger actions.
+- Identify Aarlo/Arlo and Eufy camera entities without guessing optional
+  community-integration service contracts.
+
 ## 0.4.0
 
 - Publish privacy-filtered setup health for the official Tuya, HomeKit Bridge,

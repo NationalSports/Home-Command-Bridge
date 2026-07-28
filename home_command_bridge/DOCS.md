@@ -36,6 +36,25 @@ Tuya, HomeKit Bridge, HomeKit Device, and Matter.
 The app opens outbound connections only. No port forwarding, router changes,
 public Home Assistant URL, or long-lived access token is required.
 
+## Add security cameras
+
+Keep `camera` in **Sync domains**, then use **Camera entities** to list the exact
+primary `camera.*` entities Residence may see. This prevents alternate quality,
+recording, and package feeds from appearing as duplicate physical cameras.
+Leaving the camera list empty publishes all camera entities for backward
+compatibility.
+
+Residence requests a current image only while the Security screen is open. The
+Bridge downloads that image from Home Assistant and uploads it through the
+authenticated relay; camera URLs, provider passwords, and Home Assistant access
+tokens never leave the home.
+
+For an approved Blink camera, the Bridge requests a fresh still through Home
+Assistant before reading the camera proxy and keeps at least five seconds
+between sequential Blink trigger actions. Aarlo/Arlo and Eufy camera entities
+are identified from Home Assistant's registry metadata; their current image
+remains dependent on the installed community integration.
+
 ## Add Amazon Alexa
 
 1. Enable Alexa in Home Assistant using **Home Assistant Cloud**, or finish an

@@ -20,6 +20,10 @@ versions, and Alexa safe/exposed counts. Config-entry titles, account
 identifiers, credentials, pairing codes, and accessory graphs never leave Home
 Assistant.
 
+Version 0.5 adds an exact camera allowlist, authenticated snapshots, registry
+metadata, a rate-limited fresh-image request for Blink, and reliable Aarlo/Arlo
+and Eufy identification.
+
 Version 0.2 added privacy-filtered device and area registry metadata. Residence
 uses it to group multi-channel hardware, preserve room assignments, identify
 manufacturers such as DEWENWILS, and normalize capabilities without receiving

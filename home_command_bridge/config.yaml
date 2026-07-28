@@ -1,5 +1,5 @@
 name: Home Command Bridge
-version: "0.4.0"
+version: "0.5.0"
 slug: home_command_bridge
 description: Securely connects Home Assistant to Home Command.
 url: https://github.com/NationalSports/Home-Command-Bridge
@@ -19,6 +19,7 @@ options:
     - light
     - switch
     - climate
+    - camera
     - media_player
     - lock
     - cover
@@ -33,9 +34,12 @@ options:
     - button
     - number
     - select
+  camera_entities: []
 schema:
   home_command_url: url
   pairing_code: str
   log_level: list(debug|info|warning|error)
   sync_domains:
+    - str
+  camera_entities:
     - str

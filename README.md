@@ -19,5 +19,11 @@ The bridge does not expose Home Assistant to the internet and does not send the
 Home Assistant Supervisor credential outside the app. Only the entity domains
 selected by the homeowner are synchronized.
 
+Version 0.3 adds privacy-filtered device metadata for multi-channel products
+such as DEWENWILS and explicit Alexa exposure controls for approved lights,
+switches, climate entities, scenes, and media players. Apple Home remains a
+local Home Assistant HomeKit Bridge setup and never sends Apple credentials
+through Residence.
+
 See [Home Command Bridge documentation](home_command_bridge/DOCS.md) for
 configuration and troubleshooting.

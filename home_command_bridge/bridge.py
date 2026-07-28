@@ -17,13 +17,14 @@ import secrets
 import signal
 import sys
 from contextlib import suppress
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
 import aiohttp
 
-VERSION = "0.1.0"
+VERSION = "0.3.0"
 OPTIONS_PATH = Path("/data/options.json")
 CREDENTIALS_PATH = Path("/data/home-command-credentials.json")
 CORE_REST_URL = "http://supervisor/core/api/"
@@ -33,9 +34,16 @@ COMMAND_POLL_SECONDS = 1.5
 STATE_FLUSH_SECONDS = 1.0
 HEARTBEAT_SECONDS = 20.0
 MAX_ATTRIBUTE_BYTES = 32_768
-MAX_SNAPSHOT_BYTES = 2_000_000
+MAX_SNAPSHOT_BYTES = 1_500_000
+MAX_REGISTRY_BYTES = 500_000
 MAX_PROCESSED_COMMANDS = 200
+ALEXA_SAFE_DOMAINS = {"light", "switch", "climate", "scene", "media_player"}
 SENSITIVE_ATTRIBUTE_FRAGMENTS = ("token", "password", "secret", "credential", "api_key", "access_key")
+REGISTRY_EVENT_TYPES = {
+    "entity_registry_updated",
+    "device_registry_updated",
+    "area_registry_updated",
+}
 
 
 def load_json(path: Path, fallback: dict[str, Any]) -> dict[str, Any]:
@@ -98,6 +106,58 @@ def sanitize_state(state: dict[str, Any]) -> dict[str, Any] | None:
         "attributes": attributes,
         "last_changed": state.get("last_changed"),
         "last_updated": state.get("last_updated"),
+    }
+
+
+def clean_registry_text(value: Any, maximum: int = 255) -> str:
+    return str(value or "").strip()[:maximum]
+
+
+def sanitize_registry_entity(value: dict[str, Any], categories: dict[str, Any]) -> dict[str, Any] | None:
+    if value.get("disabled_by"):
+        return None
+    entity_id = clean_registry_text(value.get("ei") or value.get("entity_id"))
+    if not entity_id or "." not in entity_id:
+        return None
+    category_value = value.get("ec")
+    category = categories.get(str(category_value), category_value) if category_value is not None else ""
+    return {
+        "entity_id": entity_id,
+        "platform": clean_registry_text(value.get("pl") or value.get("platform"), 100),
+        "device_id": clean_registry_text(value.get("di") or value.get("device_id")),
+        "area_id": clean_registry_text(value.get("ai") or value.get("area_id")),
+        "name": clean_registry_text(
+            value.get("en") or value.get("name") or value.get("original_name")
+        ),
+        "entity_category": clean_registry_text(category, 50),
+        "hidden": bool(value.get("hb") or value.get("hidden_by")),
+    }
+
+
+def sanitize_registry_device(value: dict[str, Any]) -> dict[str, Any] | None:
+    device_id = clean_registry_text(value.get("id"))
+    if not device_id:
+        return None
+    return {
+        "id": device_id,
+        "area_id": clean_registry_text(value.get("area_id")),
+        "name": clean_registry_text(value.get("name_by_user") or value.get("name")),
+        "manufacturer": clean_registry_text(value.get("manufacturer")),
+        "model": clean_registry_text(value.get("model")),
+        "model_id": clean_registry_text(value.get("model_id")),
+        "via_device_id": clean_registry_text(value.get("via_device_id")),
+    }
+
+
+def sanitize_registry_area(value: dict[str, Any]) -> dict[str, Any] | None:
+    area_id = clean_registry_text(value.get("area_id") or value.get("id"))
+    name = clean_registry_text(value.get("name"))
+    if not area_id or not name:
+        return None
+    return {
+        "id": area_id,
+        "name": name,
+        "floor_id": clean_registry_text(value.get("floor_id")),
     }
 
 
@@ -185,6 +245,12 @@ class HomeCommandBridge:
         self.http: aiohttp.ClientSession | None = None
         self.ha: HomeAssistantSocket | None = None
         self.entities: dict[str, dict[str, Any]] = {}
+        self.registry: dict[str, list[dict[str, Any]]] = {
+            "entities": [],
+            "devices": [],
+            "areas": [],
+        }
+        self.exposure: dict[str, Any] = {"available": False, "entities": {}}
         self.dirty = asyncio.Event()
         self.stopping = asyncio.Event()
         self.ha_connected = asyncio.Event()
@@ -222,6 +288,111 @@ class HomeCommandBridge:
             snapshot.append(state)
             size += len(encoded)
         return snapshot
+
+    def snapshot_registry(self) -> dict[str, list[dict[str, Any]]]:
+        snapshot = {
+            "entities": self.registry["entities"][:5_000],
+            "devices": self.registry["devices"][:2_000],
+            "areas": self.registry["areas"][:500],
+        }
+        encoded = json.dumps(snapshot, separators=(",", ":")).encode("utf-8")
+        if len(encoded) <= MAX_REGISTRY_BYTES:
+            return snapshot
+        self.log.warning("Registry snapshot reached the safe relay size; metadata was trimmed.")
+        return {
+            "entities": snapshot["entities"][:2_500],
+            "devices": snapshot["devices"][:1_000],
+            "areas": snapshot["areas"],
+        }
+
+    async def refresh_registries(self) -> None:
+        if not self.ha:
+            return
+        try:
+            entity_result = await self.ha.command({
+                "type": "config/entity_registry/list_for_display"
+            })
+        except RuntimeError:
+            entity_result = await self.ha.command({"type": "config/entity_registry/list"})
+        if isinstance(entity_result, dict):
+            raw_entities = entity_result.get("entities") or []
+            raw_categories = entity_result.get("entity_categories") or {}
+        else:
+            raw_entities = entity_result or []
+            raw_categories = {}
+        categories = {
+            str(key): clean_registry_text(value, 50)
+            for key, value in raw_categories.items()
+        } if isinstance(raw_categories, dict) else {}
+        entities = [
+            entity
+            for raw in raw_entities
+            if isinstance(raw, dict)
+            for entity in [sanitize_registry_entity(raw, categories)]
+            if entity and self.in_scope(entity["entity_id"])
+        ]
+
+        raw_devices = await self.ha.command({"type": "config/device_registry/list"})
+        devices = [
+            device
+            for raw in raw_devices or []
+            if isinstance(raw, dict)
+            for device in [sanitize_registry_device(raw)]
+            if device
+        ]
+        referenced_devices = {
+            entity["device_id"] for entity in entities if entity["device_id"]
+        }
+        referenced_devices.update(
+            device["via_device_id"]
+            for device in devices
+            if device["id"] in referenced_devices and device["via_device_id"]
+        )
+        devices = [device for device in devices if device["id"] in referenced_devices]
+
+        raw_areas = await self.ha.command({"type": "config/area_registry/list"})
+        areas = [
+            area
+            for raw in raw_areas or []
+            if isinstance(raw, dict)
+            for area in [sanitize_registry_area(raw)]
+            if area
+        ]
+        referenced_areas = {
+            entity["area_id"] for entity in entities if entity["area_id"]
+        } | {
+            device["area_id"] for device in devices if device["area_id"]
+        }
+        self.registry = {
+            "entities": entities,
+            "devices": devices,
+            "areas": [area for area in areas if area["id"] in referenced_areas],
+        }
+
+    async def refresh_exposure(self) -> None:
+        if not self.ha:
+            return
+        try:
+            result = await self.ha.command({"type": "homeassistant/expose_entity/list"})
+        except RuntimeError as error:
+            self.exposure = {"available": False, "entities": {}}
+            self.log.info("Assistant exposure controls are unavailable: %s", error)
+            return
+        raw_entities = result.get("exposed_entities") if isinstance(result, dict) else {}
+        entities: dict[str, dict[str, bool]] = {}
+        if isinstance(raw_entities, dict):
+            for entity_id, assistants in raw_entities.items():
+                domain = str(entity_id).partition(".")[0]
+                if (
+                    entity_id not in self.entities
+                    or domain not in ALEXA_SAFE_DOMAINS
+                    or not isinstance(assistants, dict)
+                ):
+                    continue
+                alexa = assistants.get("cloud.alexa")
+                if isinstance(alexa, bool):
+                    entities[entity_id] = {"cloud.alexa": alexa}
+        self.exposure = {"available": True, "entities": entities}
 
     async def request_json(
         self,
@@ -353,7 +524,11 @@ class HomeCommandBridge:
                         state = sanitize_state(raw_state)
                         if state:
                             self.entities[entity_id] = state
+                await self.refresh_registries()
+                await self.refresh_exposure()
                 await self.ha.command({"type": "subscribe_events", "event_type": "state_changed"})
+                for event_type in REGISTRY_EVENT_TYPES:
+                    await self.ha.command({"type": "subscribe_events", "event_type": event_type})
                 self.ha_connected.set()
                 self.dirty.set()
                 delay = 1.0
@@ -365,6 +540,11 @@ class HomeCommandBridge:
                 while not self.stopping.is_set():
                     payload = await self.ha.events.get()
                     event = payload.get("event") or {}
+                    event_type = str(event.get("event_type") or "")
+                    if event_type in REGISTRY_EVENT_TYPES:
+                        await self.refresh_registries()
+                        self.dirty.set()
+                        continue
                     data = event.get("data") or {}
                     entity_id = str(data.get("entity_id") or "")
                     if not self.in_scope(entity_id):
@@ -413,6 +593,9 @@ class HomeCommandBridge:
                         "homeId": self.credentials["homeId"],
                         "sequence": self.state_sequence,
                         "entities": self.snapshot_entities(),
+                        "registry": self.snapshot_registry(),
+                        "exposure": self.exposure,
+                        "capturedAt": datetime.now(timezone.utc).isoformat(),
                     },
                 )
                 last_sent = asyncio.get_running_loop().time()
@@ -449,19 +632,51 @@ class HomeCommandBridge:
             await self.ha_connected.wait()
             if not self.ha:
                 raise RuntimeError("Home Assistant is unavailable.")
-            domain = str(command.get("domain") or "")
-            service = str(command.get("service") or "")
-            if domain not in self.sync_domains:
-                raise RuntimeError(f"The {domain} domain is not approved for Home Command.")
-            await self.ha.command({
-                "type": "call_service",
-                "domain": domain,
-                "service": service,
-                "target": command.get("target") or {},
-                "service_data": command.get("serviceData") or {},
-            })
-            outcome = {"status": "completed", "error": ""}
-            self.log.info("Completed approved %s.%s command.", domain, service)
+            if command.get("kind") == "expose_entities":
+                assistant = str(command.get("assistant") or "")
+                entity_ids = command.get("entityIds")
+                should_expose = command.get("shouldExpose")
+                if assistant != "cloud.alexa":
+                    raise RuntimeError("Only Alexa exposure is approved for Home Command.")
+                if (
+                    not isinstance(entity_ids, list)
+                    or not 1 <= len(entity_ids) <= 100
+                    or not isinstance(should_expose, bool)
+                ):
+                    raise RuntimeError("The Alexa exposure command is invalid.")
+                for entity_id in entity_ids:
+                    domain = str(entity_id).partition(".")[0]
+                    if entity_id not in self.entities or domain not in ALEXA_SAFE_DOMAINS:
+                        raise RuntimeError(
+                            "Alexa exposure is limited to approved lights, switches, climate, scenes, and media players."
+                        )
+                await self.ha.command({
+                    "type": "homeassistant/expose_entity",
+                    "assistants": ["cloud.alexa"],
+                    "entity_ids": entity_ids,
+                    "should_expose": should_expose,
+                })
+                await self.refresh_exposure()
+                self.dirty.set()
+                outcome = {"status": "completed", "error": ""}
+                self.log.info(
+                    "Updated Alexa exposure for %d approved entities.",
+                    len(entity_ids),
+                )
+            else:
+                domain = str(command.get("domain") or "")
+                service = str(command.get("service") or "")
+                if domain not in self.sync_domains:
+                    raise RuntimeError(f"The {domain} domain is not approved for Home Command.")
+                await self.ha.command({
+                    "type": "call_service",
+                    "domain": domain,
+                    "service": service,
+                    "target": command.get("target") or {},
+                    "service_data": command.get("serviceData") or {},
+                })
+                outcome = {"status": "completed", "error": ""}
+                self.log.info("Completed approved %s.%s command.", domain, service)
         except Exception as error:
             self.log.warning("Command %s failed: %s", command_id[:8], error)
             outcome = {"status": "failed", "error": str(error)[:500]}
